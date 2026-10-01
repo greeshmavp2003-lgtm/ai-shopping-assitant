@@ -21,9 +21,12 @@ Students:
 - Do not remove existing function signatures or license headers.
 """
 
+import html
+import math
 import os
 from typing import Any
 import requests
+import plotly.graph_objects as go
 import streamlit as st
 
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
@@ -333,6 +336,305 @@ def render_product_card(product: dict[str, Any], rank: int) -> None:
             st.markdown(f"**⚠️ Cons:** {cons}")
 
 
+def _parse_product_specs(product: dict[str, Any]) -> dict[str, float | str | None]:
+    """Extract comparable numeric specifications from a product's key_specs."""
+    key_specs = str(product.get("key_specs") or "")
+    specs: dict[str, float | str | None] = {
+        "spec_ram": None,
+        "spec_storage": None,
+        "spec_battery": None,
+        "spec_rear_camera": None,
+        "spec_display_size": None,
+        "processor": None,
+    }
+
+    for item in key_specs.split("|"):
+        item = item.strip()
+
+        if ":" not in item:
+            continue
+
+        label, value = item.split(":", 1)
+        label = label.strip().lower()
+        value = value.strip()
+
+        try:
+            if label == "ram":
+                specs["spec_ram"] = float(value.lower().replace("gb", "").strip())
+
+            elif label == "storage":
+                specs["spec_storage"] = float(
+                    value.lower().replace("gb", "").strip()
+                )
+
+            elif label == "battery":
+                specs["spec_battery"] = float(
+                    value.lower().replace("mah", "").strip()
+                )
+
+            elif label == "display":
+                specs["spec_display_size"] = float(
+                    value.lower().replace("inches", "").replace("inch", "").strip()
+                )
+
+            elif label == "rear camera":
+                camera_value = value.lower().replace("mp", "").strip()
+                first_camera = camera_value.split("+")[0].strip()
+                specs["spec_rear_camera"] = float(first_camera)
+
+            elif label == "processor":
+                specs["processor"] = value
+
+        except ValueError:
+            continue
+
+    return specs
+
+
+def _comparison_number(value: Any) -> float | None:
+    """Return a finite numeric value, or None when it is unavailable."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _build_comparison_rows(
+    products: list[dict[str, Any]],
+    parsed_specs: list[dict[str, float | str | None]],
+) -> list[tuple[str, list[float | None], str, bool]]:
+    """Build comparable specification values for the product table."""
+    spec_rows = [
+        ("RAM", "spec_ram", "GB"),
+        ("Storage", "spec_storage", "GB"),
+        ("Battery", "spec_battery", "mAh"),
+        ("Rear Camera", "spec_rear_camera", "MP"),
+        ("Display Size", "spec_display_size", "in"),
+    ]
+    rows = [
+        (label, [_comparison_number(specs[key]) for specs in parsed_specs], unit, False)
+        for label, key, unit in spec_rows
+    ]
+    rows.append(
+        ("Score", [_comparison_number(product.get("score")) for product in products],
+         "/100", False)
+    )
+
+    price_per_gb = []
+    for product, specs in zip(products, parsed_specs):
+        price = _comparison_number(product.get("price"))
+        storage = _comparison_number(specs["spec_storage"])
+        price_per_gb.append(
+            price / storage
+            if price is not None and price > 0 and storage is not None and storage > 0
+            else None
+        )
+    rows.append(("Price per GB", price_per_gb, "₹/GB", True))
+    return rows
+
+
+def _comparison_cell(
+    value: float | None, label: str, unit: str, best_value: float | None
+) -> str:
+    """Build an escaped table cell and highlight it when it is best in its row."""
+    if value is None:
+        display_value = "N/A"
+    elif label == "Score":
+        display_value = f"{value:.1f}{unit}"
+    elif label == "Price per GB":
+        display_value = f"₹{value:,.2f}/GB"
+    else:
+        display_value = f"{value:g} {unit}"
+
+    is_best = value is not None and value == best_value
+    background = "background-color: #DCFCE7; color: #166534;" if is_best else ""
+    trophy = " 🏆" if is_best else ""
+    return (
+        f"<td style='padding: 0.65rem; border-top: 1px solid #E2E8F0; "
+        f"{background}'>{html.escape(display_value)}{trophy}</td>"
+    )
+
+
+def _comparison_table_rows(
+    rows: list[tuple[str, list[float | None], str, bool]],
+) -> str:
+    """Render comparison rows and mark the best available value in each row."""
+    table_rows = []
+    for label, values, unit, lowest_is_best in rows:
+        available_values = [value for value in values if value is not None]
+        best_value = None
+        if available_values:
+            best_value = min(available_values) if lowest_is_best else max(available_values)
+        cells = "".join(
+            _comparison_cell(value, label, unit, best_value) for value in values
+        )
+        table_rows.append(
+            "<tr>"
+            "<th style='padding: 0.65rem; text-align: left; "
+            "border-top: 1px solid #E2E8F0;'>"
+            f"{html.escape(label)}</th>{cells}</tr>"
+        )
+    return "".join(table_rows)
+
+
+def render_spec_comparison(top_products: list[dict[str, Any]]) -> None:
+    """Render a side-by-side comparison of the top products' specifications."""
+    products = top_products[:3]
+    if not products:
+        return
+
+    parsed_specs = [_parse_product_specs(product) for product in products]
+    rows = _build_comparison_rows(products, parsed_specs)
+    headers = "".join(
+        "<th style='padding: 0.65rem; text-align: left;'>"
+        f"#{index} {html.escape(str(product.get('product_name') or 'Product'))}"
+        "</th>"
+        for index, product in enumerate(products, start=1)
+    )
+    table_rows = _comparison_table_rows(rows)
+
+    st.markdown("### 📋 Spec Comparison")
+    st.markdown(
+        "<div style='overflow-x: auto;'><table style='width: 100%; "
+        "border-collapse: collapse;'><thead><tr>"
+        "<th style='padding: 0.65rem; text-align: left;'>Specification</th>"
+        f"{headers}</tr></thead><tbody>{table_rows}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_spec_radar_chart(top_products: list[dict[str, Any]]) -> None:
+    """Render an interactive radar chart comparing the top products."""
+    if not top_products:
+        return
+
+    for product in top_products:
+        product.update(_parse_product_specs(product))
+
+    st.markdown("### 📊 Visual Specification Comparison")
+
+    dimensions = [
+        "Camera",
+        "Battery",
+        "Performance",
+        "Display",
+        "Value for Money",
+    ]
+
+    def performance_score(product: dict[str, Any]) -> float:
+        """Estimate processor performance for visualization."""
+        processor = str(product.get("processor") or "").lower()
+
+        performance_tiers = [
+            ("snapdragon 8 gen", 100),
+            ("snapdragon 7s gen", 92),
+            ("snapdragon 7 gen", 90),
+            ("tensor g5", 95),
+            ("tensor", 80),
+            ("dimensity 9", 90),
+            ("dimensity 8", 85),
+            ("dimensity 7", 75),
+            ("dimensity 6", 65),
+            ("exynos 13", 70),
+            ("exynos", 65),
+            ("snapdragon 6", 65),
+            ("snapdragon 4", 50),
+            ("helio", 45),
+            ("unisoc t7", 45),
+            ("unisoc", 40),
+        ]
+
+        for processor_family, score in performance_tiers:
+            if processor_family in processor:
+                return float(score)
+
+        return 50.0
+
+    products_for_chart = top_products[:3]
+
+    price_per_gb_values = []
+    for product in products_for_chart:
+        price = float(product.get("price") or 0)
+        storage = float(product.get("spec_storage") or 0)
+
+        if price > 0 and storage > 0:
+            price_per_gb_values.append(price / storage)
+
+    best_price_per_gb = min(price_per_gb_values) if price_per_gb_values else 0
+
+    def radar_values(product: dict[str, Any]) -> list[float]:
+        """Convert product specifications into 0-100 radar-chart scores."""
+        camera = min(
+            float(product.get("spec_rear_camera") or 0) / 200 * 100,
+            100,
+        )
+
+        battery = min(
+            float(product.get("spec_battery") or 0) / 7000 * 100,
+            100,
+        )
+
+        display = min(
+            float(product.get("spec_display_size") or 0) / 7.0 * 100,
+            100,
+        )
+
+        price = float(product.get("price") or 0)
+        storage = float(product.get("spec_storage") or 0)
+
+        if price > 0 and storage > 0 and best_price_per_gb > 0:
+            price_per_gb = price / storage
+            value = min(100, (best_price_per_gb / price_per_gb) * 100)
+        else:
+            value = 0.0
+
+        return [
+            round(camera, 1),
+            round(battery, 1),
+            round(performance_score(product), 1),
+            round(display, 1),
+            round(value, 1),
+        ]
+
+    fig = go.Figure()
+
+    for index, product in enumerate(products_for_chart, start=1):
+        product_name = product.get("product_name") or f"Product {index}"
+        values = radar_values(product)
+
+        closed_dimensions = dimensions + [dimensions[0]]
+        closed_values = values + [values[0]]
+
+        fig.add_trace(
+            go.Scatterpolar(
+                r=closed_values,
+                theta=closed_dimensions,
+                fill="toself",
+                name=f"#{index} {product_name}",
+                hovertemplate=(
+                    "<b>%{theta}</b><br>"
+                    "Score: %{r:.1f}/100"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 100],
+            )
+        ),
+        showlegend=True,
+        height=550,
+        margin=dict(l=60, r=60, t=50, b=50),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_results(response_data: dict[str, Any]) -> None:
     """
     Renders the recommendation box and top product cards grid.
@@ -359,6 +661,9 @@ def render_results(response_data: dict[str, Any]) -> None:
     for idx, (col, prod) in enumerate(zip(cols, top_products), start=1):
         with col:
             render_product_card(prod, rank=idx)
+
+    render_spec_comparison(top_products)
+    render_spec_radar_chart(top_products)
 
 
 def _execute_search(

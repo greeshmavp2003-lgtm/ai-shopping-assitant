@@ -15,3 +15,4 @@ httpx
 
 # Frontend UI (optional)
 streamlit
+plotly==7.1.0
