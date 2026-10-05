@@ -149,7 +149,7 @@ def _fetch_store_products(store_url: str, key: str, secret: str, per_page: int =
 
 def load_products_from_woocommerce() -> pd.DataFrame:
     """
-    Loads products live from WooCommerce Store A (and B, C once configured).
+    Loads products live from configured WooCommerce Stores A and B.
 
     Returns:
         pd.DataFrame of products, or an empty DataFrame if no store
@@ -162,9 +162,18 @@ def load_products_from_woocommerce() -> pd.DataFrame:
          config.WC_CONSUMER_KEY, config.WC_CONSUMER_SECRET),
     ]
 
-    # TODO: Store B and C will be added here once they're populated —
-    #   stores.append((config.STORE_B_URL, config.STORE_B_CONSUMER_KEY, config.STORE_B_CONSUMER_SECRET))
-    #   stores.append((config.STORE_C_URL, config.STORE_C_CONSUMER_KEY, config.STORE_C_CONSUMER_SECRET))
+    if (
+        config.STORE_B_URL
+        and config.STORE_B_CONSUMER_KEY
+        and config.STORE_B_CONSUMER_SECRET
+    ):
+        stores.append(
+            (
+                config.STORE_B_URL,
+                config.STORE_B_CONSUMER_KEY,
+                config.STORE_B_CONSUMER_SECRET,
+            )
+        )
 
     for store_url, key, secret in stores:
         raw_products = _fetch_store_products(store_url, key, secret)
@@ -183,7 +192,15 @@ def load_products_from_woocommerce() -> pd.DataFrame:
 
 def load_products_from_csv() -> pd.DataFrame:
     """Loads the product dataset from the local CSV file."""
-    return pd.read_csv(DATA_PATH)
+    df = pd.read_csv(DATA_PATH)
+
+    # Replace missing text fields with empty strings.
+    # This prevents pandas NaN values from reaching Pydantic response models.
+    for column in ["pros", "cons", "key_specs", "brand", "category", "subcategory", "store"]:
+        if column in df.columns:
+            df[column] = df[column].fillna("")
+
+    return df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -279,10 +296,9 @@ def search_products(query: str, max_budget: float = None, category: str = None) 
     # ─────────────────────────────────────────────────────────────────────────
 
     # ─────────────────────────────────────────────────────────────────────────
-    # TODO 4: Add Store B and Store C once they're populated
-    #   - Uncomment the stores.append(...) lines in load_products_from_woocommerce()
-    #   - Add STORE_B_URL / STORE_B_CONSUMER_KEY / STORE_B_CONSUMER_SECRET
-    #     (and _C_ equivalents) to your .env once Minu has those stores running
+    # TODO 4: Add Store C once its data and credentials are available
+    #   - Add STORE_C_URL / STORE_C_CONSUMER_KEY / STORE_C_CONSUMER_SECRET
+    #     to .env after Store C has been populated
     #   - No other code changes needed — compare.py already groups by "store"
     # ─────────────────────────────────────────────────────────────────────────
 
