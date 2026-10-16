@@ -16,3 +16,6 @@ httpx
 # Frontend UI (optional)
 streamlit
 plotly==7.1.0
+
+Pillow
+google-genai>=1.0.0

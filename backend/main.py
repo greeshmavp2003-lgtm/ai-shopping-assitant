@@ -22,6 +22,7 @@ Students:
 
 import logging
 import time
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -59,6 +60,9 @@ class ChatRequest(BaseModel):
     message: str
     max_budget: float = None      # optional — user can specify budget
     category: str = None          # optional — user can specify category
+    personality: Literal["Tech Geek", "Bargain Hunter", "Everyday User"] = (
+        "Everyday User"
+    )
 
 
 class ProductResult(BaseModel):
@@ -145,7 +149,9 @@ def chat(request: ChatRequest):
 
     # ── Step 3 — Recommend ────────────────────────────────────────────────────
     t0 = time.time()
-    recommendation = get_recommendation(request.message, top_products)
+    recommendation = get_recommendation(
+        request.message, top_products, request.personality
+    )
     llm_time = time.time() - t0
 
     total_time = time.time() - pipeline_start

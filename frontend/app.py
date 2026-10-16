@@ -25,8 +25,9 @@ import html
 import math
 import os
 from typing import Any
-import requests
+
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
@@ -122,6 +123,26 @@ def get_bot_avatar() -> str:
     return "🤖"
 
 
+def get_personality_greeting(personality: str) -> str:
+    """Return a greeting tailored to the selected shopping assistant persona."""
+    greetings = {
+        "Tech Geek": (
+            "Hey there! 👋 Let’s compare the details that matter: processor, "
+            "camera, battery, display, RAM, storage, and 5G support. What specs "
+            "are you looking for?"
+        ),
+        "Bargain Hunter": (
+            "Hey there! 👋 Let’s find you a great deal. Share your budget and I’ll "
+            "help compare prices, discounts, and value for money."
+        ),
+        "Everyday User": (
+            "Hey there! 👋 What do you need your phone to do every day? Tell me "
+            "your budget or what matters most, and I’ll help find an easy, practical fit."
+        ),
+    }
+    return greetings.get(personality, greetings["Everyday User"])
+
+
 def render_bot_greeting() -> str | None:
     """
     Renders an interactive greeting widget where the shopping bot asks
@@ -130,6 +151,8 @@ def render_bot_greeting() -> str | None:
     Returns:
         str | None: Selected prompt string if clicked, else None.
     """
+    personality = st.session_state.get("bot_personality", "Everyday User")
+    greeting = get_personality_greeting(personality)
     avatar_src = get_bot_avatar()
     col1, col2 = st.columns([1, 7])
     with col1:
@@ -142,16 +165,9 @@ def render_bot_greeting() -> str | None:
             )
     with col2:
         st.markdown(
-            """
-            <div class="bot-greeting-box">
-                <div class="bot-bubble-text">
-                    <strong>Shopping Assistant Bot:</strong><br>
-                    <em>"Hey there! 👋 What kind of smartphone can I help you find today?
-                    Tell me your budget, preferred brand, or must-have specs (camera, battery,
-                    5G, gaming), and I'll search and score the best options across stores!"</em>
-                </div>
-            </div>
-            """,
+            f'<div class="bot-greeting-box"><div class="bot-bubble-text">'
+            f'<strong>Shopping Assistant Bot:</strong><br><em>"{greeting}"</em>'
+            f'</div></div>',
             unsafe_allow_html=True,
         )
 
@@ -193,6 +209,7 @@ def query_chat_api(
     message: str,
     max_budget: float | None = None,
     category: str | None = None,
+    personality: str = "Everyday User",
 ) -> dict[str, Any]:
     """
     Calls the POST /chat endpoint on the backend pipeline.
@@ -202,6 +219,7 @@ def query_chat_api(
         message: The user's query text (e.g. "Best phone under 20000").
         max_budget: Optional budget limit in INR.
         category: Optional product category filter.
+        personality: Selected response style.
 
     Returns:
         dict: The response payload containing recommendation and top_products.
@@ -210,7 +228,7 @@ def query_chat_api(
         requests.HTTPError: If backend responds with an error code (e.g., 404).
         requests.ConnectionError: If backend server is offline or unreachable.
     """
-    payload: dict[str, Any] = {"message": message}
+    payload: dict[str, Any] = {"message": message, "personality": personality}
     if max_budget is not None and max_budget > 0:
         payload["max_budget"] = max_budget
     if category and category.strip():
@@ -258,6 +276,13 @@ def render_sidebar(base_url: str) -> tuple[float | None, str | None, str | None]
     """
     st.sidebar.title("⚙️ Settings & Filters")
     _render_sidebar_status(base_url)
+
+    st.sidebar.subheader("🤖 Bot Personality")
+    st.session_state["bot_personality"] = st.sidebar.selectbox(
+        "Choose a personality",
+        ["Tech Geek", "Bargain Hunter", "Everyday User"],
+        key="bot_personality_widget",
+    )
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔍 Filters (Optional)")
@@ -644,9 +669,11 @@ def render_results(response_data: dict[str, Any]) -> None:
     """
     recommendation = response_data.get("recommendation", "")
     top_products = response_data.get("top_products", [])
+    personality = st.session_state.get("bot_personality", "Everyday User")
 
     st.markdown("### 💬 Assistant Recommendation")
     with st.chat_message("assistant", avatar=get_bot_avatar()):
+        st.caption(f"🤖 {personality} mode")
         st.markdown(
             f'<div class="recommendation-box">{recommendation}</div>',
             unsafe_allow_html=True,
@@ -667,7 +694,11 @@ def render_results(response_data: dict[str, Any]) -> None:
 
 
 def _execute_search(
-    base_url: str, query: str, budget: float | None, category: str | None
+    base_url: str,
+    query: str,
+    budget: float | None,
+    category: str | None,
+    personality: str = "Everyday User",
 ) -> None:
     """
     Executes search query against backend API with spinner and error handling.
@@ -677,11 +708,15 @@ def _execute_search(
         query: User's search query string.
         budget: Maximum budget filter value.
         category: Category filter value.
+        personality: Selected recommendation style.
     """
     with st.spinner("Searching stores, scoring specs, and generating recommendations..."):
         try:
-            result = query_chat_api(base_url, query.strip(), budget, category)
+            result = query_chat_api(
+                base_url, query.strip(), budget, category, personality
+            )
             st.session_state["last_result"] = result
+            st.session_state["last_result_personality"] = personality
         except requests.HTTPError as err:
             if err.response is not None and err.response.status_code == 404:
                 detail = err.response.json().get("detail", "No products found.")
@@ -709,6 +744,7 @@ def main() -> None:
     )
 
     max_budget, category, example_query = render_sidebar(DEFAULT_API_BASE_URL)
+    personality = st.session_state.get("bot_personality", "Everyday User")
     bot_prompt = render_bot_greeting()
 
     if "current_query" not in st.session_state or example_query:
@@ -726,11 +762,20 @@ def main() -> None:
 
     active_query = bot_prompt or example_query or (user_query if submitted else None)
     if active_query and active_query.strip():
-        _execute_search(DEFAULT_API_BASE_URL, active_query.strip(), max_budget, category)
+        _execute_search(
+            DEFAULT_API_BASE_URL,
+            active_query.strip(),
+            max_budget,
+            category,
+            personality,
+        )
     elif submitted and not user_query.strip():
         st.warning("Please enter a search query.")
 
-    if st.session_state.get("last_result"):
+    if (
+        st.session_state.get("last_result")
+        and st.session_state.get("last_result_personality") == personality
+    ):
         render_results(st.session_state["last_result"])
 
 
